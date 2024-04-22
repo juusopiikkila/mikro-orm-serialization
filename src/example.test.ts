@@ -1,51 +1,110 @@
-import { Entity, MikroORM, PrimaryKey, Property } from '@mikro-orm/sqlite';
+import {
+    BaseEntity,
+    Entity,
+    MikroORM,
+    PrimaryKey,
+    Property,
+    Collection as MikroCollection,
+    ManyToMany,
+} from '@mikro-orm/sqlite';
 
 @Entity()
-class User {
+class Product extends BaseEntity {
+    @PrimaryKey()
+    id!: number;
 
-  @PrimaryKey()
-  id!: number;
+    @Property()
+    sku!: string;
 
-  @Property()
-  name: string;
+    @ManyToMany(() => Collection, (collection) => collection.matchProducts)
+    matchCollections = new MikroCollection<Collection>(this);
 
-  @Property({ unique: true })
-  email: string;
+    @ManyToMany(() => Collection, (collection) => collection.fetchProducts)
+    fetchCollections = new MikroCollection<Collection>(this);
+}
 
-  constructor(name: string, email: string) {
-    this.name = name;
-    this.email = email;
-  }
+@Entity()
+class Collection extends BaseEntity {
+    @PrimaryKey()
+    id!: number;
 
+    @Property()
+    priority = 0;
+
+    @ManyToMany(() => Product)
+    matchProducts = new MikroCollection<Product>(this);
+
+    @ManyToMany(() => Product)
+    fetchProducts = new MikroCollection<Product>(this);
 }
 
 let orm: MikroORM;
 
 beforeAll(async () => {
-  orm = await MikroORM.init({
-    dbName: ':memory:',
-    entities: [User],
-    debug: ['query', 'query-params'],
-    allowGlobalContext: true, // only for testing
-  });
-  await orm.schema.refreshDatabase();
+    orm = await MikroORM.init({
+        dbName: ':memory:',
+        entities: [Product, Collection],
+        debug: ['query', 'query-params'],
+        allowGlobalContext: true, // only for testing
+    });
+    await orm.schema.refreshDatabase();
 });
 
 afterAll(async () => {
-  await orm.close(true);
+    await orm.close(true);
 });
 
 test('basic CRUD example', async () => {
-  orm.em.create(User, { name: 'Foo', email: 'foo' });
-  await orm.em.flush();
-  orm.em.clear();
+    const product1 = orm.em.create(Product, {
+        sku: '123',
+    });
 
-  const user = await orm.em.findOneOrFail(User, { email: 'foo' });
-  expect(user.name).toBe('Foo');
-  user.name = 'Bar';
-  orm.em.remove(user);
-  await orm.em.flush();
+    const product2 = orm.em.create(Product, {
+        sku: '234',
+    });
 
-  const count = await orm.em.count(User, { email: 'foo' });
-  expect(count).toBe(0);
+    const product3 = orm.em.create(Product, {
+        sku: '345',
+    });
+
+    orm.em.create(Collection, {
+        priority: 1,
+        matchProducts: [product1, product2],
+        fetchProducts: [product3],
+    });
+
+    orm.em.create(Collection, {
+        priority: 2,
+        matchProducts: [product1, product2],
+        fetchProducts: [product3],
+    });
+
+    await orm.em.flush();
+
+    orm.em.clear();
+
+    const product = await orm.em.findOneOrFail(Product, {
+        sku: '123',
+    });
+
+    const qb = orm.em.getRepository(Product).createQueryBuilder('product')
+        .leftJoin('fetchCollections', 'collection')
+        .where(
+            `EXISTS (
+                SELECT 1
+                FROM collection_match_products
+                WHERE collection_id = collection.id
+                AND product_id = ?)
+            `,
+            [product.id],
+        )
+        .orderBy({
+            // eslint-disable-next-line @typescript-eslint/naming-convention
+            'collection.priority': 'DESC',
+        })
+        .limit(25);
+
+    const results = await qb.getResultList();
+
+    expect(results).toHaveLength(1);
 });
