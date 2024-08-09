@@ -1,41 +1,54 @@
 import {
     BaseEntity,
+    Collection,
     Entity,
+    JsonType,
+    ManyToOne,
     MikroORM,
+    OneToMany,
     PrimaryKey,
     Property,
-    Collection as MikroCollection,
-    ManyToMany,
+    Rel,
 } from '@mikro-orm/sqlite';
+// } from '@mikro-orm/mysql';
 
 @Entity()
-class Product extends BaseEntity {
+class ShippingMethod extends BaseEntity {
     @PrimaryKey()
     id!: number;
 
     @Property()
-    sku!: string;
+    name!: string;
 
-    @ManyToMany(() => Collection, (collection) => collection.matchProducts)
-    matchCollections = new MikroCollection<Collection>(this);
-
-    @ManyToMany(() => Collection, (collection) => collection.fetchProducts)
-    fetchCollections = new MikroCollection<Collection>(this);
+    @OneToMany(() => ShippingMethodArea, (area) => area.shippingMethod)
+    areas = new Collection<ShippingMethodArea>(this);
 }
 
 @Entity()
-class Collection extends BaseEntity {
+class ShippingMethodArea extends BaseEntity {
     @PrimaryKey()
     id!: number;
 
     @Property()
-    priority = 0;
+    price!: number;
 
-    @ManyToMany(() => Product)
-    matchProducts = new MikroCollection<Product>(this);
+    @ManyToOne(() => ShippingArea)
+    shippingArea!: Rel<ShippingArea>;
 
-    @ManyToMany(() => Product)
-    fetchProducts = new MikroCollection<Product>(this);
+    @ManyToOne(() => ShippingMethod)
+    shippingMethod!: Rel<ShippingMethod>;
+}
+
+@Entity()
+class ShippingArea extends BaseEntity {
+    @PrimaryKey()
+    id!: number;
+
+    @Property()
+    name!: string;
+
+    @Property({ type: JsonType })
+    codes!: string[];
 }
 
 let orm: MikroORM;
@@ -43,7 +56,11 @@ let orm: MikroORM;
 beforeAll(async () => {
     orm = await MikroORM.init({
         dbName: ':memory:',
-        entities: [Product, Collection],
+        // dbName: 'testing',
+        // host: 'localhost',
+        // user: 'root',
+        // password: 'secret',
+        entities: [ShippingMethod, ShippingMethodArea, ShippingArea],
         debug: ['query', 'query-params'],
         allowGlobalContext: true, // only for testing
     });
@@ -55,56 +72,49 @@ afterAll(async () => {
 });
 
 test('basic CRUD example', async () => {
-    const product1 = orm.em.create(Product, {
-        sku: '123',
-    });
-
-    const product2 = orm.em.create(Product, {
-        sku: '234',
-    });
-
-    const product3 = orm.em.create(Product, {
-        sku: '345',
-    });
-
-    orm.em.create(Collection, {
-        priority: 1,
-        matchProducts: [product1, product2],
-        fetchProducts: [product3],
-    });
-
-    orm.em.create(Collection, {
-        priority: 2,
-        matchProducts: [product1, product2],
-        fetchProducts: [product3],
+    orm.em.create(ShippingMethod, {
+        name: 'Shipping method',
+        areas: [
+            {
+                price: 100,
+                shippingArea: {
+                    name: 'Area 1',
+                    codes: [
+                        '93700', '93830', '93900', '97999', '98999', '99135',
+                        '12310', '12350', '12380', '12400',
+                    ],
+                },
+            },
+            {
+                price: 200,
+                shippingArea: {
+                    name: 'Area 2',
+                    codes: [
+                        '32830', '32860', '32910', '32920', '39920', '39930', '39940',
+                        '39960', '39965', '39980', '39990', '41240', '41260', '41270',
+                        '41500', '41520', '41530', '41540', '41550', '41560', '41580',
+                        '41710', '41730', '41750', '41770', '41820', '41870', '41880',
+                    ],
+                },
+            },
+        ],
     });
 
     await orm.em.flush();
 
     orm.em.clear();
 
-    const product = await orm.em.findOneOrFail(Product, {
-        sku: '123',
+    const shippingMethod = await orm.em.findOneOrFail(ShippingMethod, {
+        name: 'Shipping method',
     });
 
-    const qb = orm.em.getRepository(Product).createQueryBuilder('product')
-        .leftJoin('fetchCollections', 'collection')
-        .where(
-            `EXISTS (
-                SELECT 1
-                FROM collection_match_products
-                WHERE collection_id = collection.id
-                AND product_id = ?)
-            `,
-            [product.id],
-        )
-        .orderBy({
-            // eslint-disable-next-line @typescript-eslint/naming-convention
-            'collection.priority': 'DESC',
-        })
-        .limit(25);
+    await shippingMethod.areas.init({
+        populate: [
+            'shippingArea',
+        ],
+    });
 
-    const results = await qb.getResultList();
+    const areas = shippingMethod.areas.getItems();
 
-    expect(results).toHaveLength(1);
+    expect(areas[0].shippingArea.codes).toContain('93700');
 });
